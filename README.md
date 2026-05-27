@@ -47,6 +47,9 @@ Open your browser at `http://localhost:5000`
 4. **Generation** — Relevant chunks + question are sent to Groq's LLaMA3 model
 5. **Answer** — Response is streamed back to the UI
 
+## Here is Screensot of working UI
+![alt text](image.png)
+
 ## 📦 Tech Stack
 
 - **Backend:** Python, Flask
@@ -63,5 +66,5 @@ Open your browser at `http://localhost:5000`
 
 ## 👩‍💻 Author
 
-**Inchara S M** — [linkedin.com/in/incharasm](https://linkedin.com/in/incharasm) | [github.com/IncharaSM](https://github.com/IncharaSM)
+**Inchara S M** — [linkedin.com/in/incharasm](www.linkedin.com/in/inchara-s-m-459aa11a0) | [github.com/IncharaSM](https://github.com/IncharaSM)
 "# pdf-rag-chatbot" 
