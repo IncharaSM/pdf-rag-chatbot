@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PDF RAG Chatbot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; justify-content: center; padding: 40px 16px; }
+    .container { width: 100%; max-width: 720px; }
+    h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 4px; background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 28px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; color: #cbd5e1; }
+    .upload-area { border: 2px dashed #334155; border-radius: 8px; padding: 24px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+    .upload-area:hover { border-color: #60a5fa; }
+    .upload-label { cursor: pointer; color: #60a5fa; font-size: 0.95rem; display: block; }
+    .upload-area p { font-size: 0.8rem; color: #64748b; margin-top: 6px; }
+    .btn { background: linear-gradient(90deg, #3b82f6, #8b5cf6); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; font-weight: 600; margin-top: 12px; width: 100%; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .status { margin-top: 10px; font-size: 0.85rem; padding: 8px 12px; border-radius: 6px; display: none; }
+    .status.success { background: #14532d; color: #86efac; display: block; }
+    .status.error { background: #450a0a; color: #fca5a5; display: block; }
+    .chat-box { height: 340px; overflow-y: auto; background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 12px; }
+    .message { display: flex; flex-direction: column; max-width: 85%; }
+    .message.user { align-self: flex-end; align-items: flex-end; }
+    .message.bot { align-self: flex-start; }
+    .bubble { padding: 10px 14px; border-radius: 10px; font-size: 0.9rem; line-height: 1.5; }
+    .user .bubble { background: #3b82f6; color: white; border-bottom-right-radius: 2px; }
+    .bot .bubble { background: #1e293b; color: #e2e8f0; border-bottom-left-radius: 2px; border: 1px solid #334155; }
+    .label { font-size: 0.7rem; color: #64748b; margin-bottom: 3px; }
+    .input-row { display: flex; gap: 8px; }
+    .input-row input { flex: 1; background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 10px 14px; border-radius: 8px; font-size: 0.9rem; outline: none; }
+    .input-row input:focus { border-color: #60a5fa; }
+    .input-row button { background: linear-gradient(90deg, #3b82f6, #8b5cf6); color: white; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+    .input-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .empty-state { color: #475569; font-size: 0.85rem; text-align: center; margin: auto; }
+    .thinking { color: #60a5fa; font-size: 0.85rem; font-style: italic; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>📄 Chatbot</h1>
+  <p class="subtitle">Upload a PDF and ask questions — powered by Groq + LLaMA 3</p>
+
+  <div class="card">
+    <h2>Step 1 — Upload your PDF</h2>
+    <div class="upload-area" onclick="document.getElementById('pdfInput').click()">
+      <span class="upload-label">Click to choose a PDF file</span>
+      <p id="fileName">No file selected</p>
+    </div>
+    <input type="file" id="pdfInput" accept=".pdf" style="display:none" onchange="handleFileSelect(this)"/>
+    <button class="btn" id="uploadBtn" onclick="uploadPDF()" disabled>Upload & Process</button>
+    <div class="status" id="uploadStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2>Step 2 — Ask questions</h2>
+    <div class="chat-box" id="chatBox">
+      <p class="empty-state">Upload a PDF to start chatting...</p>
+    </div>
+    <div class="input-row">
+      <input type="text" id="questionInput" placeholder="Ask something about your PDF..." onkeydown="if(event.key==='Enter') askQuestion()" disabled/>
+      <button id="askBtn" onclick="askQuestion()" disabled>Ask</button>
+    </div>
+  </div>
+</div>
+<script>
+  let pdfReady = false;
+  function handleFileSelect(input) {
+    if (input.files[0]) {
+      document.getElementById('fileName').textContent = input.files[0].name;
+      document.getElementById('uploadBtn').disabled = false;
+    }
+  }
+  async function uploadPDF() {
+    const fileInput = document.getElementById('pdfInput');
+    const statusEl = document.getElementById('uploadStatus');
+    const btn = document.getElementById('uploadBtn');
+    if (!fileInput.files[0]) return;
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    btn.disabled = true; btn.textContent = 'Processing...';
+    statusEl.className = 'status';
+    try {
+      const res = await fetch('/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok) {
+        statusEl.textContent = '✅ ' + data.message;
+        statusEl.className = 'status success';
+        pdfReady = true;
+        document.getElementById('questionInput').disabled = false;
+        document.getElementById('askBtn').disabled = false;
+        document.getElementById('chatBox').innerHTML = '<p class="empty-state">PDF ready! Ask your first question below.</p>';
+      } else {
+        statusEl.textContent = '❌ ' + data.error;
+        statusEl.className = 'status error';
+      }
+    } catch(e) {
+      statusEl.textContent = '❌ Upload failed: ' + e.message;
+      statusEl.className = 'status error';
+    }
+    btn.textContent = 'Upload & Process';
+    btn.disabled = false;
+  }
+  async function askQuestion() {
+    const input = document.getElementById('questionInput');
+    const question = input.value.trim();
+    if (!question || !pdfReady) return;
+    const chatBox = document.getElementById('chatBox');
+    const emptyState = chatBox.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+    chatBox.innerHTML += `<div class="message user"><div class="label">You</div><div class="bubble">${question}</div></div>`;
+    const tid = 'thinking-' + Date.now();
+    chatBox.innerHTML += `<div id="${tid}" class="message bot"><div class="bubble thinking">Thinking...</div></div>`;
+    chatBox.scrollTop = chatBox.scrollHeight;
+    input.value = ''; document.getElementById('askBtn').disabled = true;
+    try {
+      const res = await fetch('/ask', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question}) });
+      const data = await res.json();
+      document.getElementById(tid).remove();
+      chatBox.innerHTML += `<div class="message bot"><div class="label">AI</div><div class="bubble">${data.answer || data.error}</div></div>`;
+    } catch(e) {
+      document.getElementById(tid).remove();
+      chatBox.innerHTML += `<div class="message bot"><div class="bubble" style="color:#fca5a5">Error: ${e.message}</div></div>`;
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+    document.getElementById('askBtn').disabled = false;
+    input.focus();
+  }
+</script>
+</body>
+</html>
