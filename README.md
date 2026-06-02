@@ -62,7 +62,7 @@ Open your browser at `http://localhost:5000`
 - [ ] Swap keyword retrieval for vector embeddings (ChromaDB)
 - [ ] Add conversation memory / chat history
 - [ ] Support multiple PDFs
-- [ ] Deploy to Hugging Face Spaces or Render
+- [x] Deploy to Hugging Face Spaces or Render
 
 ## 👩‍💻 Author
 
