@@ -49,7 +49,7 @@
       <span class="upload-label">Click to choose a PDF file</span>
       <p id="fileName">No file selected</p>
     </div>
-    <input type="file" id="pdfInput" accept=".pdf" style="display:none" onchange="handleFileSelect(this)"/>
+    <input type="file" id="pdfInput" accept=".pdf" multiple style="display:none" onchange="handleFileSelect(this)"/>
     <button class="btn" id="uploadBtn" onclick="uploadPDF()" disabled>Upload & Process</button>
     <div class="status" id="uploadStatus"></div>
   </div>
@@ -69,7 +69,8 @@
   let pdfReady = false;
   function handleFileSelect(input) {
     if (input.files[0]) {
-      document.getElementById('fileName').textContent = input.files[0].name;
+      const names = Array.from(input.files).map(f => f.name).join(', ');
+      document.getElementById('fileName').textContent = names;
       document.getElementById('uploadBtn').disabled = false;
     }
   }
@@ -79,7 +80,11 @@
     const btn = document.getElementById('uploadBtn');
     if (!fileInput.files[0]) return;
     const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
+    for (const file of fileInput.files) {
+      const formData = new FormData();
+      formData.append('file', file);
+      await fetch('/upload', { method: 'POST', body: formData });
+    }
     btn.disabled = true; btn.textContent = 'Processing...';
     statusEl.className = 'status';
     try {

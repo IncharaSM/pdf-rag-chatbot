@@ -65,10 +65,9 @@ def upload():
     if not text.strip():
         return jsonify({"error": "PDF appears to be empty or scanned (no text found)."}), 400
 
-    pdf_text_store["current"] = chunk_text(text)
-    return jsonify({
-        "message": f"PDF loaded! {len(text)} characters across {len(pdf_text_store['current'])} chunks."
-    })
+    pdf_text_store[file.filename] = chunk_text(text)
+    return jsonify(
+        {"message": f"'{file.filename}' loaded! {len(pdf_text_store)} PDF(s) total."})
 
 @app.route("/ask", methods=["POST"])
 def ask():
@@ -76,10 +75,12 @@ def ask():
     question = data.get("question", "").strip()
     if not question:
         return jsonify({"error": "No question provided."}), 400
-    if "current" not in pdf_text_store:
+    if not pdf_text_store:
         return jsonify({"error": "Please upload a PDF first."}), 400
-
-    context = "\n\n---\n\n".join(find_relevant_chunks(pdf_text_store["current"], question))
+    
+    all_chunks = [chunk for chunks in pdf_text_store.values() for chunk in chunks]
+    context = "\n\n---\n\n".join(find_relevant_chunks(all_chunks, question))
+    
     prompt = f"""Answer the question based ONLY on the PDF content below.
 If the answer is not found, say "I couldn't find that in the PDF."
 
