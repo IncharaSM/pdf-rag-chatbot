@@ -78,36 +78,44 @@
     const fileInput = document.getElementById('pdfInput');
     const statusEl = document.getElementById('uploadStatus');
     const btn = document.getElementById('uploadBtn');
+
     if (!fileInput.files[0]) return;
-    const formData = new FormData();
-    for (const file of fileInput.files) {
-      const formData = new FormData();
-      formData.append('file', file);
-      await fetch('/upload', { method: 'POST', body: formData });
-    }
-    btn.disabled = true; btn.textContent = 'Processing...';
+
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
     statusEl.className = 'status';
+
     try {
-      const res = await fetch('/upload', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (res.ok) {
-        statusEl.textContent = '✅ ' + data.message;
+        let lastMessage = '';
+        for (const file of fileInput.files) {
+            const formData = new FormData();
+            formData.append('file', file);
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (!res.ok) {
+                statusEl.textContent = '❌ ' + data.error;
+                statusEl.className = 'status error';
+                btn.textContent = 'Upload & Process';
+                btn.disabled = false;
+                return;
+            }
+            lastMessage = data.message;
+        }
+        statusEl.textContent = '✅ ' + lastMessage;
         statusEl.className = 'status success';
         pdfReady = true;
         document.getElementById('questionInput').disabled = false;
         document.getElementById('askBtn').disabled = false;
         document.getElementById('chatBox').innerHTML = '<p class="empty-state">PDF ready! Ask your first question below.</p>';
-      } else {
-        statusEl.textContent = '❌ ' + data.error;
-        statusEl.className = 'status error';
-      }
+
     } catch(e) {
-      statusEl.textContent = '❌ Upload failed: ' + e.message;
-      statusEl.className = 'status error';
+        statusEl.textContent = '❌ Upload failed: ' + e.message;
+        statusEl.className = 'status error';
     }
+
     btn.textContent = 'Upload & Process';
     btn.disabled = false;
-  }
+}
   async function askQuestion() {
     const input = document.getElementById('questionInput');
     const question = input.value.trim();
