@@ -165,7 +165,7 @@ def analyze_resume():
     if not resume_text.strip():
         return jsonify({"error": "Resume PDF appears to be empty or scanned."}), 400
 
-    resume_store        = {"text": resume_text}
+    resume_store        = {"text": resume_text, "jd": jd_text}
     resume_chat_history = []
 
     if jd_text:
@@ -234,6 +234,12 @@ def resume_chat():
     if not resume_store:
         return jsonify({"error": "Please analyze a resume first."}), 400
 
+    jd_section = f"""The target Job Description is:
+---
+{resume_store['jd']}
+---
+Tailor all suggestions and rewrites to match this job description.""" if resume_store.get('jd') else "No job description was provided — improve for general ATS compatibility."
+
     system_prompt = f"""You are an expert resume writer and career coach helping to create an ATS-friendly resume.
 
 The user's current resume text is:
@@ -241,12 +247,17 @@ The user's current resume text is:
 {resume_store['text']}
 ---
 
-Help the user improve their resume. When they ask you to rewrite or generate the final resume:
-- Use clear section headers in ALL CAPS (e.g. SUMMARY, EXPERIENCE, EDUCATION, SKILLS)
-- Use bullet points with dashes (-)
+{jd_section}
+
+When rewriting or improving the resume, follow these rules STRICTLY:
+- Do NOT use any markdown formatting (no **, no *, no #, no backticks)
+- Use plain text ONLY
+- Section headers must be in ALL CAPS on their own line (e.g. SUMMARY, EXPERIENCE, EDUCATION, SKILLS)
+- Use a dash (-) at the start of every bullet point line
+- Separate sections with a blank line
 - Keep formatting simple and ATS-friendly (no tables, no columns)
-- Be specific and use action verbs
-- Include quantified achievements where possible"""
+- Use strong action verbs and quantified achievements
+- Do NOT truncate or cut off any content — write the complete resume"""
 
     resume_chat_history.append({"role": "user", "content": message})
     messages = [{"role": "system", "content": system_prompt}] + resume_chat_history
@@ -274,64 +285,79 @@ def generate_pdf():
         return jsonify({"error": "No resume text provided."}), 400
 
     try:
-        # Sanitize: remove non-latin1 characters fpdf2/Helvetica can't handle
-        resume_text = resume_text.encode("latin-1", errors="replace").decode("latin-1")
-        # Replace common unicode characters with ASCII equivalents
-        resume_text = resume_text.replace("\u2019", "'").replace("\u2018", "'")
-        resume_text = resume_text.replace("\u201c", '"').replace("\u201d", '"')
-        resume_text = resume_text.replace("\u2013", "-").replace("\u2014", "-")
-        resume_text = resume_text.replace("\u2022", "-").replace("\u00b7", "-")
-        resume_text = resume_text.replace("\u2026", "...").replace("\u00a0", " ")
+        # Strip markdown formatting
+        resume_text = re.sub(r'\*\*(.*?)\*\*', r'\1', resume_text)  # **bold**
+        resume_text = re.sub(r'\*(.*?)\*',     r'\1', resume_text)  # *italic*
+        resume_text = re.sub(r'#{1,6}\s*',     '',    resume_text)  # # headers
+        resume_text = re.sub(r'`{1,3}',        '',    resume_text)  # `code`
+        resume_text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', resume_text)  # _italic_
+        # Step 1: aggressive unicode → ASCII sanitization
+        replacements = {
+            "\u2019": "'",  "\u2018": "'",  "\u2032": "'",
+            "\u201c": '"',  "\u201d": '"',  "\u2033": '"',
+            "\u2013": "-",  "\u2014": "-",  "\u2015": "-",
+            "\u2022": "-",  "\u00b7": "-",  "\u25cf": "-",
+            "\u2026": "...","\u00a0": " ",  "\u200b": "",
+            "\u00e9": "e",  "\u00e8": "e",  "\u00ea": "e",
+            "\u00e0": "a",  "\u00e2": "a",  "\u00f4": "o",
+            "\u00fb": "u",  "\u00fc": "u",  "\u00e7": "c",
+        }
+        for k, v in replacements.items():
+            resume_text = resume_text.replace(k, v)
+
+        # Step 2: drop anything still outside latin-1 range
+        resume_text = resume_text.encode("latin-1", errors="ignore").decode("latin-1")
+
+        # Step 3: break any token longer than 50 chars (URLs, long strings)
+        def safe_line(text):
+            tokens = text.split(" ")
+            out = []
+            for tok in tokens:
+                while len(tok) > 50:
+                    out.append(tok[:50])
+                    tok = tok[50:]
+                out.append(tok)
+            return " ".join(out)
 
         pdf = FPDF()
         pdf.set_margins(20, 20, 20)
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.set_font("Helvetica", size=10)
 
-        def safe_text(t):
-            """Break any word longer than 60 chars to prevent overflow."""
-            words = t.split(" ")
-            broken = []
-            for w in words:
-                while len(w) > 60:
-                    broken.append(w[:60])
-                    w = w[60:]
-                broken.append(w)
-            return " ".join(broken)
+        for raw_line in resume_text.split("\n"):
+            line = safe_line(raw_line.rstrip())
+            stripped = line.strip()
 
-        for line in resume_text.split("\n"):
-            line = line.rstrip()
-            if not line.strip():
-                pdf.ln(2)
+            if not stripped:
+                pdf.ln(3)
                 continue
 
-            line = safe_text(line)
-
-            # Section headers (ALL CAPS lines, short enough to be a heading)
-            stripped = line.strip()
-            is_header = stripped.isupper() and 2 < len(stripped) < 60 and not stripped.startswith("-")
-
-            if is_header:
-                pdf.ln(3)
+            # Section header: ALL CAPS, short, no special chars
+            if (stripped.isupper()
+                    and 2 < len(stripped) < 50
+                    and not stripped.startswith("-")):
+                pdf.ln(4)
                 pdf.set_font("Helvetica", style="B", size=11)
                 pdf.set_text_color(30, 80, 160)
-                pdf.multi_cell(0, 8, stripped)
+                pdf.multi_cell(170, 7, stripped)
                 pdf.set_draw_color(30, 80, 160)
                 pdf.line(20, pdf.get_y(), 190, pdf.get_y())
                 pdf.ln(2)
+                pdf.set_font("Helvetica", size=10)
                 pdf.set_text_color(0, 0, 0)
 
-            # Bullet points
+            # Bullet point
             elif stripped.startswith("-"):
                 pdf.set_font("Helvetica", size=10)
                 pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(0, 6, "-  " + stripped[1:].strip())
+                pdf.multi_cell(170, 6, "-  " + stripped[1:].strip())
 
-            # Regular text
+            # Normal line
             else:
                 pdf.set_font("Helvetica", size=10)
                 pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(0, 6, stripped)
+                pdf.multi_cell(170, 6, stripped)
 
         pdf_bytes = pdf.output()
         return send_file(
@@ -342,6 +368,8 @@ def generate_pdf():
         )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
 
 
