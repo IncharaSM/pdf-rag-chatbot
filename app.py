@@ -288,36 +288,50 @@ def generate_pdf():
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=20)
 
+        def safe_text(t):
+            """Break any word longer than 60 chars to prevent overflow."""
+            words = t.split(" ")
+            broken = []
+            for w in words:
+                while len(w) > 60:
+                    broken.append(w[:60])
+                    w = w[60:]
+                broken.append(w)
+            return " ".join(broken)
+
         for line in resume_text.split("\n"):
             line = line.rstrip()
+            if not line.strip():
+                pdf.ln(2)
+                continue
 
-            # Section headers (ALL CAPS lines)
-            if line.strip() and line.strip().isupper() and len(line.strip()) > 2:
+            line = safe_text(line)
+
+            # Section headers (ALL CAPS lines, short enough to be a heading)
+            stripped = line.strip()
+            is_header = stripped.isupper() and 2 < len(stripped) < 60 and not stripped.startswith("-")
+
+            if is_header:
                 pdf.ln(3)
-                pdf.set_font("Helvetica", style="B", size=12)
+                pdf.set_font("Helvetica", style="B", size=11)
                 pdf.set_text_color(30, 80, 160)
-                pdf.cell(0, 8, line.strip(), new_x="LMARGIN", new_y="NEXT")
+                pdf.multi_cell(0, 8, stripped)
                 pdf.set_draw_color(30, 80, 160)
                 pdf.line(20, pdf.get_y(), 190, pdf.get_y())
                 pdf.ln(2)
                 pdf.set_text_color(0, 0, 0)
 
             # Bullet points
-            elif line.strip().startswith("-"):
+            elif stripped.startswith("-"):
                 pdf.set_font("Helvetica", size=10)
                 pdf.set_text_color(0, 0, 0)
-                bullet_text = "-  " + line.strip()[1:].strip()
-                pdf.multi_cell(0, 6, bullet_text)
-
-            # Empty lines
-            elif line.strip() == "":
-                pdf.ln(2)
+                pdf.multi_cell(0, 6, "-  " + stripped[1:].strip())
 
             # Regular text
             else:
                 pdf.set_font("Helvetica", size=10)
                 pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(0, 6, line.strip())
+                pdf.multi_cell(0, 6, stripped)
 
         pdf_bytes = pdf.output()
         return send_file(
