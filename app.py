@@ -1,43 +1,36 @@
 import os
 import json
+import re
+import io
 import numpy as np
-from numpy.linalg import norm
 from dotenv import load_dotenv
 load_dotenv()
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify, render_template, send_file
 from groq import Groq
-#from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from fpdf import FPDF
-import io
-import re
 
 app = Flask(__name__)
 client = Groq(api_key=os.environ.get("your_api_key"))
 
-# Load embedding model once at startup
-print("Loading embedding model...")
-#embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-print("Embedding model ready.")
-
-pdf_text_store = {}       # { filename: { "chunks": [...], "embeddings": np.array } }
-resume_store   = {}       # { "text": full resume text }
-resume_chat_history = []  # list of { role, content }
+pdf_text_store      = {}   # { filename: { "chunks": [...] } }
+resume_store        = {}   # { "text": full resume text }
+resume_chat_history = []   # [ { role, content } ]
 
 # ── PDF helpers ────────────────────────────────────────────────
 
 def extract_text_from_pdf(file):
     data = file.read()
-    doc = fitz.open(stream=data, filetype="pdf")
+    doc  = fitz.open(stream=data, filetype="pdf")
     text = ""
     for page in doc:
         text += page.get_text()
     return text
 
 def extract_text_from_pdf_bytes(data):
-    doc = fitz.open(stream=data, filetype="pdf")
+    doc  = fitz.open(stream=data, filetype="pdf")
     text = ""
     for page in doc:
         text += page.get_text()
@@ -56,17 +49,8 @@ def chunk_text(text, chunk_size=3000):
         chunks.append(" ".join(current))
     return chunks
 
-'''def find_relevant_chunks_vector(question, top_n=4):
-    query_vec = embed_model.encode([question], convert_to_numpy=True)[0]
-    results = []
-    for filename, data in pdf_text_store.items():
-        for chunk, emb in zip(data["chunks"], data["embeddings"]):
-            score = np.dot(query_vec, emb) / (norm(query_vec) * norm(emb) + 1e-10)
-            results.append((score, filename, chunk))
-    results.sort(reverse=True)
-    return results[:top_n]'''
-
-def find_relevant_chunks_vector(question, top_n=4):
+def find_relevant_chunks(question, top_n=4):
+    """TF-IDF cosine similarity search across all uploaded PDFs."""
     all_chunks, filenames = [], []
     for filename, data in pdf_text_store.items():
         for chunk in data["chunks"]:
@@ -76,15 +60,15 @@ def find_relevant_chunks_vector(question, top_n=4):
     if not all_chunks:
         return []
 
-    vectorizer = TfidfVectorizer().fit(all_chunks + [question])
-    chunk_vecs = vectorizer.transform(all_chunks)
-    query_vec  = vectorizer.transform([question])
-    scores     = cosine_similarity(query_vec, chunk_vecs)[0]
+    vectorizer  = TfidfVectorizer().fit(all_chunks + [question])
+    chunk_vecs  = vectorizer.transform(all_chunks)
+    query_vec   = vectorizer.transform([question])
+    scores      = cosine_similarity(query_vec, chunk_vecs)[0]
 
     top_indices = scores.argsort()[::-1][:top_n]
     return [(scores[i], filenames[i], all_chunks[i]) for i in top_indices]
 
-# ── Existing PDF chatbot routes ────────────────────────────────
+# ── PDF Chatbot routes ─────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -94,40 +78,51 @@ def index():
 def upload():
     if "file" not in request.files:
         return jsonify({"error": "No file received. Make sure you selected a PDF."}), 400
+
     file = request.files["file"]
+
     if file.filename == "":
         return jsonify({"error": "No file selected."}), 400
+
     if not file.filename.lower().endswith(".pdf"):
         return jsonify({"error": "Only PDF files are supported."}), 400
+
     try:
         text = extract_text_from_pdf(file)
     except Exception as e:
         return jsonify({"error": f"Failed to read PDF: {str(e)}"}), 500
+
     if not text.strip():
         return jsonify({"error": "PDF appears to be empty or scanned (no text found)."}), 400
+
     chunks = chunk_text(text)
-    print(f"Embedding {len(chunks)} chunks for '{file.filename}'...")
-    #embeddings = embed_model.encode(chunks, convert_to_numpy=True)
-    print(f"Done embedding '{file.filename}'.")
-    #pdf_text_store[file.filename] = {"chunks": chunks, "embeddings": embeddings}
     pdf_text_store[file.filename] = {"chunks": chunks}
-    return jsonify({"message": f"'{file.filename}' loaded! {len(pdf_text_store)} PDF(s) total."})
+
+    return jsonify({
+        "message": f"'{file.filename}' loaded! {len(pdf_text_store)} PDF(s) total."
+    })
 
 @app.route("/status", methods=["GET"])
 def status():
-    return jsonify({"pdf_count": len(pdf_text_store), "pdf_names": list(pdf_text_store.keys())})
+    return jsonify({
+        "pdf_count": len(pdf_text_store),
+        "pdf_names": list(pdf_text_store.keys())
+    })
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    data = request.json
+    data     = request.json
     question = data.get("question", "").strip()
+
     if not question:
         return jsonify({"error": "No question provided."}), 400
     if not pdf_text_store:
         return jsonify({"error": "Please upload a PDF first."}), 400
-    top_chunks = find_relevant_chunks_vector(question, top_n=4)
+
+    top_chunks = find_relevant_chunks(question, top_n=4)
     all_chunks = [f"[From: {fname}]\n{chunk}" for _, fname, chunk in top_chunks]
-    context = "\n\n---\n\n".join(all_chunks)
+    context    = "\n\n---\n\n".join(all_chunks)
+
     prompt = f"""You have been given content from {len(pdf_text_store)} PDF(s), each labeled with its filename.
 Answer the question based ONLY on the content below.
 If asked for separate summaries, summarize each PDF separately using its filename as a header.
@@ -138,6 +133,7 @@ PDF Content:
 
 Question: {question}
 Answer:"""
+
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -155,12 +151,11 @@ Answer:"""
 def analyze_resume():
     global resume_store, resume_chat_history
 
-    # Get resume text from uploaded PDF
     if "resume" not in request.files:
         return jsonify({"error": "No resume file received."}), 400
 
     resume_file = request.files["resume"]
-    jd_text = request.form.get("jd", "").strip()
+    jd_text     = request.form.get("jd", "").strip()
 
     try:
         resume_text = extract_text_from_pdf_bytes(resume_file.read())
@@ -170,11 +165,9 @@ def analyze_resume():
     if not resume_text.strip():
         return jsonify({"error": "Resume PDF appears to be empty or scanned."}), 400
 
-    # Store resume for chat session
-    resume_store = {"text": resume_text}
+    resume_store        = {"text": resume_text}
     resume_chat_history = []
 
-    # Build ATS analysis prompt
     if jd_text:
         prompt = f"""You are an expert ATS (Applicant Tracking System) analyzer.
 
@@ -218,10 +211,8 @@ Return this exact JSON structure:
             max_tokens=1024,
             temperature=0.1
         )
-        raw = response.choices[0].message.content.strip()
-
-        # Clean up any markdown code fences if present
-        raw = re.sub(r"```json|```", "", raw).strip()
+        raw    = response.choices[0].message.content.strip()
+        raw    = re.sub(r"```json|```", "", raw).strip()
         result = json.loads(raw)
         return jsonify(result)
 
@@ -235,7 +226,7 @@ Return this exact JSON structure:
 def resume_chat():
     global resume_chat_history
 
-    data = request.json
+    data    = request.json
     message = data.get("message", "").strip()
 
     if not message:
@@ -243,7 +234,6 @@ def resume_chat():
     if not resume_store:
         return jsonify({"error": "Please analyze a resume first."}), 400
 
-    # Build system prompt with resume context
     system_prompt = f"""You are an expert resume writer and career coach helping to create an ATS-friendly resume.
 
 The user's current resume text is:
@@ -258,10 +248,7 @@ Help the user improve their resume. When they ask you to rewrite or generate the
 - Be specific and use action verbs
 - Include quantified achievements where possible"""
 
-    # Add user message to history
     resume_chat_history.append({"role": "user", "content": message})
-
-    # Build messages for API
     messages = [{"role": "system", "content": system_prompt}] + resume_chat_history
 
     try:
@@ -280,13 +267,22 @@ Help the user improve their resume. When they ask you to rewrite or generate the
 
 @app.route("/generate-pdf", methods=["POST"])
 def generate_pdf():
-    data = request.json
+    data        = request.json
     resume_text = data.get("text", "").strip()
 
     if not resume_text:
         return jsonify({"error": "No resume text provided."}), 400
 
     try:
+        # Sanitize: remove non-latin1 characters fpdf2/Helvetica can't handle
+        resume_text = resume_text.encode("latin-1", errors="replace").decode("latin-1")
+        # Replace common unicode characters with ASCII equivalents
+        resume_text = resume_text.replace("\u2019", "'").replace("\u2018", "'")
+        resume_text = resume_text.replace("\u201c", '"').replace("\u201d", '"')
+        resume_text = resume_text.replace("\u2013", "-").replace("\u2014", "-")
+        resume_text = resume_text.replace("\u2022", "-").replace("\u00b7", "-")
+        resume_text = resume_text.replace("\u2026", "...").replace("\u00a0", " ")
+
         pdf = FPDF()
         pdf.set_margins(20, 20, 20)
         pdf.add_page()
@@ -296,7 +292,7 @@ def generate_pdf():
             line = line.rstrip()
 
             # Section headers (ALL CAPS lines)
-            if line.isupper() and len(line.strip()) > 2:
+            if line.strip() and line.strip().isupper() and len(line.strip()) > 2:
                 pdf.ln(3)
                 pdf.set_font("Helvetica", style="B", size=12)
                 pdf.set_text_color(30, 80, 160)
