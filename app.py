@@ -1,14 +1,22 @@
 import os
+import numpy as np
+from numpy.linalg import norm
 from dotenv import load_dotenv
 load_dotenv()
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify, render_template
 from groq import Groq
-#
-app = Flask(__name__)
-client = Groq(api_key= os.environ.get("your_api_key"))
+from sentence_transformers import SentenceTransformer
 
-pdf_text_store = {}
+app = Flask(__name__)
+client = Groq(api_key=os.environ.get("your_api_key"))
+
+# Load embedding model once at startup
+print("Loading embedding model...")
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+print("Embedding model ready.")
+
+pdf_text_store = {}  # { filename: { "chunks": [...], "embeddings": np.array } }
 
 def extract_text_from_pdf(file):
     data = file.read()
@@ -31,10 +39,17 @@ def chunk_text(text, chunk_size=3000):
         chunks.append(" ".join(current))
     return chunks
 
-def find_relevant_chunks(chunks, question, top_n=3):
-    question_words = set(question.lower().split())
-    scored = sorted(chunks, key=lambda c: len(set(c.lower().split()) & question_words), reverse=True)
-    return scored[:top_n]
+def find_relevant_chunks_vector(question, top_n=4):
+    """Find most relevant chunks across all PDFs using cosine similarity."""
+    query_vec = embed_model.encode([question], convert_to_numpy=True)[0]
+    results = []
+    for filename, data in pdf_text_store.items():
+        for chunk, emb in zip(data["chunks"], data["embeddings"]):
+            # Cosine similarity
+            score = np.dot(query_vec, emb) / (norm(query_vec) * norm(emb) + 1e-10)
+            results.append((score, filename, chunk))
+    results.sort(reverse=True)
+    return results[:top_n]
 
 @app.route("/")
 def index():
@@ -42,14 +57,10 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    print("Files received:", request.files)
-    print("Form data:", request.form)
-
     if "file" not in request.files:
         return jsonify({"error": "No file received. Make sure you selected a PDF."}), 400
 
     file = request.files["file"]
-    print("Filename:", file.filename)
 
     if file.filename == "":
         return jsonify({"error": "No file selected."}), 400
@@ -65,9 +76,28 @@ def upload():
     if not text.strip():
         return jsonify({"error": "PDF appears to be empty or scanned (no text found)."}), 400
 
-    pdf_text_store[file.filename] = chunk_text(text)
-    return jsonify(
-        {"message": f"'{file.filename}' loaded! {len(pdf_text_store)} PDF(s) total."})
+    chunks = chunk_text(text)
+
+    # Generate vector embeddings for all chunks
+    print(f"Embedding {len(chunks)} chunks for '{file.filename}'...")
+    embeddings = embed_model.encode(chunks, convert_to_numpy=True)
+    print(f"Done embedding '{file.filename}'.")
+
+    pdf_text_store[file.filename] = {
+        "chunks": chunks,
+        "embeddings": embeddings
+    }
+
+    return jsonify({
+        "message": f"'{file.filename}' loaded! {len(pdf_text_store)} PDF(s) total."
+    })
+
+@app.route("/status", methods=["GET"])
+def status():
+    return jsonify({
+        "pdf_count": len(pdf_text_store),
+        "pdf_names": list(pdf_text_store.keys())
+    })
 
 @app.route("/ask", methods=["POST"])
 def ask():
@@ -77,12 +107,16 @@ def ask():
         return jsonify({"error": "No question provided."}), 400
     if not pdf_text_store:
         return jsonify({"error": "Please upload a PDF first."}), 400
-    
-    all_chunks = [chunk for chunks in pdf_text_store.values() for chunk in chunks]
-    context = "\n\n---\n\n".join(find_relevant_chunks(all_chunks, question))
-    
-    prompt = f"""Answer the question based ONLY on the PDF content below.
-If the answer is not found, say "I couldn't find that in the PDF."
+
+    # Vector search across all PDFs
+    top_chunks = find_relevant_chunks_vector(question, top_n=4)
+    all_chunks = [f"[From: {fname}]\n{chunk}" for _, fname, chunk in top_chunks]
+    context = "\n\n---\n\n".join(all_chunks)
+
+    prompt = f"""You have been given content from {len(pdf_text_store)} PDF(s), each labeled with its filename.
+Answer the question based ONLY on the content below.
+If asked for separate summaries, summarize each PDF separately using its filename as a header.
+If the answer is not found, say "I couldn't find that in the PDFs."
 
 PDF Content:
 {context}
