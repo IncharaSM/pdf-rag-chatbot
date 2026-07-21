@@ -266,7 +266,7 @@ When rewriting or improving the resume, follow these rules STRICTLY:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            max_tokens=1024,
+            max_tokens=4096,
             temperature=0.3
         )
         reply = response.choices[0].message.content.strip()
