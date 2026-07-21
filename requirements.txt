@@ -3,5 +3,5 @@ groq
 pymupdf
 python-dotenv
 fpdf2
-sentence-transformers
+scikit-learn
 numpy

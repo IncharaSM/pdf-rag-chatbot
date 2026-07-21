@@ -7,7 +7,9 @@ load_dotenv()
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify, render_template, send_file
 from groq import Groq
-from sentence_transformers import SentenceTransformer
+#from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from fpdf import FPDF
 import io
 import re
@@ -17,7 +19,7 @@ client = Groq(api_key=os.environ.get("your_api_key"))
 
 # Load embedding model once at startup
 print("Loading embedding model...")
-embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+#embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 print("Embedding model ready.")
 
 pdf_text_store = {}       # { filename: { "chunks": [...], "embeddings": np.array } }
@@ -54,7 +56,7 @@ def chunk_text(text, chunk_size=3000):
         chunks.append(" ".join(current))
     return chunks
 
-def find_relevant_chunks_vector(question, top_n=4):
+'''def find_relevant_chunks_vector(question, top_n=4):
     query_vec = embed_model.encode([question], convert_to_numpy=True)[0]
     results = []
     for filename, data in pdf_text_store.items():
@@ -62,7 +64,25 @@ def find_relevant_chunks_vector(question, top_n=4):
             score = np.dot(query_vec, emb) / (norm(query_vec) * norm(emb) + 1e-10)
             results.append((score, filename, chunk))
     results.sort(reverse=True)
-    return results[:top_n]
+    return results[:top_n]'''
+
+def find_relevant_chunks_vector(question, top_n=4):
+    all_chunks, filenames = [], []
+    for filename, data in pdf_text_store.items():
+        for chunk in data["chunks"]:
+            all_chunks.append(chunk)
+            filenames.append(filename)
+
+    if not all_chunks:
+        return []
+
+    vectorizer = TfidfVectorizer().fit(all_chunks + [question])
+    chunk_vecs = vectorizer.transform(all_chunks)
+    query_vec  = vectorizer.transform([question])
+    scores     = cosine_similarity(query_vec, chunk_vecs)[0]
+
+    top_indices = scores.argsort()[::-1][:top_n]
+    return [(scores[i], filenames[i], all_chunks[i]) for i in top_indices]
 
 # ── Existing PDF chatbot routes ────────────────────────────────
 
@@ -87,9 +107,10 @@ def upload():
         return jsonify({"error": "PDF appears to be empty or scanned (no text found)."}), 400
     chunks = chunk_text(text)
     print(f"Embedding {len(chunks)} chunks for '{file.filename}'...")
-    embeddings = embed_model.encode(chunks, convert_to_numpy=True)
+    #embeddings = embed_model.encode(chunks, convert_to_numpy=True)
     print(f"Done embedding '{file.filename}'.")
-    pdf_text_store[file.filename] = {"chunks": chunks, "embeddings": embeddings}
+    #pdf_text_store[file.filename] = {"chunks": chunks, "embeddings": embeddings}
+    pdf_text_store[file.filename] = {"chunks": chunks}
     return jsonify({"message": f"'{file.filename}' loaded! {len(pdf_text_store)} PDF(s) total."})
 
 @app.route("/status", methods=["GET"])
@@ -279,7 +300,7 @@ def generate_pdf():
                 pdf.ln(3)
                 pdf.set_font("Helvetica", style="B", size=12)
                 pdf.set_text_color(30, 80, 160)
-                pdf.cell(0, 8, line.strip(), ln=True)
+                pdf.cell(0, 8, line.strip(), new_x="LMARGIN", new_y="NEXT")
                 pdf.set_draw_color(30, 80, 160)
                 pdf.line(20, pdf.get_y(), 190, pdf.get_y())
                 pdf.ln(2)
@@ -289,7 +310,7 @@ def generate_pdf():
             elif line.strip().startswith("-"):
                 pdf.set_font("Helvetica", size=10)
                 pdf.set_text_color(0, 0, 0)
-                bullet_text = "•  " + line.strip()[1:].strip()
+                bullet_text = "-  " + line.strip()[1:].strip()
                 pdf.multi_cell(0, 6, bullet_text)
 
             # Empty lines
