@@ -59,7 +59,7 @@ Open your browser at `http://localhost:5000`
 
 ## 🔮 Future Improvements
 
-- [ ] Swap keyword retrieval for vector embeddings (ChromaDB)
+- [x] Swap keyword retrieval for vector embeddings (ChromaDB)
 - [ ] Add conversation memory / chat history
 - [x] Support multiple PDFs
 - [x] Deploy to Hugging Face Spaces or Render
