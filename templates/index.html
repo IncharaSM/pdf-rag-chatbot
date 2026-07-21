@@ -67,13 +67,23 @@
 </div>
 <script>
   let pdfReady = false;
+
   function handleFileSelect(input) {
-    if (input.files[0]) {
+    if (input.files.length > 0) {
       const names = Array.from(input.files).map(f => f.name).join(', ');
       document.getElementById('fileName').textContent = names;
       document.getElementById('uploadBtn').disabled = false;
     }
   }
+
+  function appendMessage(role, text) {
+    const chatBox = document.getElementById('chatBox');
+    const emptyState = chatBox.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+    chatBox.innerHTML += `<div class="message ${role}"><div class="label">${role === 'user' ? 'You' : 'AI'}</div><div class="bubble">${text}</div></div>`;
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+
   async function uploadPDF() {
     const fileInput = document.getElementById('pdfInput');
     const statusEl = document.getElementById('uploadStatus');
@@ -86,57 +96,76 @@
     statusEl.className = 'status';
 
     try {
-        let lastMessage = '';
-        for (const file of fileInput.files) {
-            const formData = new FormData();
-            formData.append('file', file);
-            const res = await fetch('/upload', { method: 'POST', body: formData });
-            const data = await res.json();
-            if (!res.ok) {
-                statusEl.textContent = '❌ ' + data.error;
-                statusEl.className = 'status error';
-                btn.textContent = 'Upload & Process';
-                btn.disabled = false;
-                return;
-            }
-            lastMessage = data.message;
+      let lastMessage = '';
+      for (const file of fileInput.files) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = '❌ ' + data.error;
+          statusEl.className = 'status error';
+          btn.textContent = 'Upload & Process';
+          btn.disabled = false;
+          return;
         }
-        statusEl.textContent = '✅ ' + lastMessage;
-        statusEl.className = 'status success';
-        pdfReady = true;
-        document.getElementById('questionInput').disabled = false;
-        document.getElementById('askBtn').disabled = false;
-        document.getElementById('chatBox').innerHTML = '<p class="empty-state">PDF ready! Ask your first question below.</p>';
+        lastMessage = data.message;
+      }
+      statusEl.textContent = '✅ ' + lastMessage;
+      statusEl.className = 'status success';
+      pdfReady = true;
+      document.getElementById('questionInput').disabled = false;
+      document.getElementById('askBtn').disabled = false;
+      document.getElementById('chatBox').innerHTML = '<p class="empty-state">PDF ready! Ask your first question below.</p>';
 
     } catch(e) {
-        statusEl.textContent = '❌ Upload failed: ' + e.message;
-        statusEl.className = 'status error';
+      statusEl.textContent = '❌ Upload failed: ' + e.message;
+      statusEl.className = 'status error';
     }
 
     btn.textContent = 'Upload & Process';
     btn.disabled = false;
-}
+  }
+
   async function askQuestion() {
     const input = document.getElementById('questionInput');
     const question = input.value.trim();
     if (!question || !pdfReady) return;
-    const chatBox = document.getElementById('chatBox');
-    const emptyState = chatBox.querySelector('.empty-state');
-    if (emptyState) emptyState.remove();
-    chatBox.innerHTML += `<div class="message user"><div class="label">You</div><div class="bubble">${question}</div></div>`;
+
+    // Intercept meta questions locally
+    if (question.toLowerCase().includes("how many pdf") ||
+        question.toLowerCase().includes("which pdf") ||
+        question.toLowerCase().includes("what pdf") ||
+        question.toLowerCase().includes("list pdf") ||
+        question.toLowerCase().includes("loaded pdf")) {
+      appendMessage('user', question);
+      const res = await fetch('/status');
+      const data = await res.json();
+      appendMessage('bot', `You have loaded ${data.pdf_count} PDF(s):<br>${data.pdf_names.join('<br>')}`);
+      input.value = '';
+      return;
+    }
+
+    appendMessage('user', question);
+
     const tid = 'thinking-' + Date.now();
+    const chatBox = document.getElementById('chatBox');
     chatBox.innerHTML += `<div id="${tid}" class="message bot"><div class="bubble thinking">Thinking...</div></div>`;
     chatBox.scrollTop = chatBox.scrollHeight;
-    input.value = ''; document.getElementById('askBtn').disabled = true;
+
+    input.value = '';
+    document.getElementById('askBtn').disabled = true;
+
     try {
       const res = await fetch('/ask', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question}) });
       const data = await res.json();
       document.getElementById(tid).remove();
-      chatBox.innerHTML += `<div class="message bot"><div class="label">AI</div><div class="bubble">${data.answer || data.error}</div></div>`;
+      appendMessage('bot', data.answer || data.error);
     } catch(e) {
       document.getElementById(tid).remove();
       chatBox.innerHTML += `<div class="message bot"><div class="bubble" style="color:#fca5a5">Error: ${e.message}</div></div>`;
     }
+
     chatBox.scrollTop = chatBox.scrollHeight;
     document.getElementById('askBtn').disabled = false;
     input.focus();
