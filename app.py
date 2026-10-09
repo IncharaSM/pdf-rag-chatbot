@@ -13,8 +13,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from fpdf import FPDF
 
 app = Flask(__name__)
-client = Groq(api_key=os.environ.get("your_api_key"))
-
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+"Groq key is not availabe"
 pdf_text_store      = {}   # { filename: { "chunks": [...] } }
 resume_store        = {}   # { "text": full resume text }
 resume_chat_history = []   # [ { role, content } ]
